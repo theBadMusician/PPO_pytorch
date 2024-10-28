@@ -1,0 +1,6 @@
+torch
+torchrl
+matplotlib
+numpy
+tensordict
+termcolor
