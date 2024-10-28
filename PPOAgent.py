@@ -7,6 +7,7 @@ from torchrl.collectors import SyncDataCollector
 from torchrl.data.replay_buffers import ReplayBuffer
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
 from torchrl.data.replay_buffers.storages import LazyTensorStorage
+from tensordict.nn import TensorDictModule
 from collections import defaultdict
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -60,20 +61,34 @@ class PPOAgent:
         self.replay_buffer = ReplayBuffer(storage=LazyTensorStorage(max_size=self.frames_per_batch), sampler=SamplerWithoutReplacement())
 
     def _build_policy(self):
+        # Access the observation and action dimensions directly
+        obs_shape = self.env.obs_dim
+        action_dim = self.env.action_dim
+
         actor_net = nn.Sequential(
-            nn.Linear(self.env.observation_spec.shape[0], self.num_cells),
+            nn.Linear(obs_shape, self.num_cells),
             nn.Tanh(),
             nn.Linear(self.num_cells, self.num_cells),
             nn.Tanh(),
             nn.Linear(self.num_cells, self.num_cells),
             nn.Tanh(),
-            nn.Linear(self.num_cells, 2 * self.env.action_spec.shape[-1]),
+            nn.Linear(self.num_cells, 2 * action_dim),
+        ).to(self.device)
+
+        # Wrap the network in a TensorDictModule with the correct input/output keys
+        policy_module = TensorDictModule(
+            actor_net,
+            in_keys=["observation"],   # Matches the key in env.observation_spec
+            out_keys=["action"]  # Output key should be "action" to match environment expectations
         )
-        return actor_net.to(self.device)
+        return policy_module
 
     def _build_value(self):
+        # Access the observation dimension directly
+        obs_shape = self.env.obs_dim
+        
         value_net = nn.Sequential(
-            nn.Linear(self.env.observation_spec.shape[0], self.num_cells),
+            nn.Linear(obs_shape, self.num_cells),
             nn.Tanh(),
             nn.Linear(self.num_cells, self.num_cells),
             nn.Tanh(),
