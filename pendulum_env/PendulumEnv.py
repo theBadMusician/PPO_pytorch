@@ -20,6 +20,9 @@ from torchrl.envs.transforms.transforms import _apply_to_composite
 from torchrl.envs.utils import check_env_specs, step_mdp
 from termcolor import cprint
 
+from SinTransform import SinTransform
+from CosTransform import CosTransform
+
 DEFAULT_X = np.pi
 DEFAULT_Y = 1.0
 
@@ -205,53 +208,6 @@ class PendulumEnv(EnvBase):
     _step = staticmethod(_step)
     _set_seed = _set_seed
 
-class SinTransform(Transform):
-    def _apply_transform(self, obs: torch.Tensor) -> None:
-        return obs.sin()
-
-    # The transform must also modify the data at reset time
-    def _reset(
-        self, tensordict: TensorDictBase, tensordict_reset: TensorDictBase
-    ) -> TensorDictBase:
-        return self._call(tensordict_reset)
-
-    # _apply_to_composite will execute the observation spec transform across all
-    # in_keys/out_keys pairs and write the result in the observation_spec which
-    # is of type ``Composite``
-    @_apply_to_composite
-    def transform_observation_spec(self, observation_spec):
-        return BoundedTensorSpec(
-            low=-1,
-            high=1,
-            shape=observation_spec.shape,
-            dtype=observation_spec.dtype,
-            device=observation_spec.device,
-        )
-
-class CosTransform(Transform):
-    def _apply_transform(self, obs: torch.Tensor) -> None:
-        return obs.cos()
-
-    # The transform must also modify the data at reset time
-    def _reset(
-        self, tensordict: TensorDictBase, tensordict_reset: TensorDictBase
-    ) -> TensorDictBase:
-        return self._call(tensordict_reset)
-
-    # _apply_to_composite will execute the observation spec transform across all
-    # in_keys/out_keys pairs and write the result in the observation_spec which
-    # is of type ``Composite``
-    @_apply_to_composite
-    def transform_observation_spec(self, observation_spec):
-        return BoundedTensorSpec(
-            low=-1,
-            high=1,
-            shape=observation_spec.shape,
-            dtype=observation_spec.dtype,
-            device=observation_spec.device,
-        )
-    
-
 def simple_rollout(env, steps=100):
     # preallocate:
     data = TensorDict({}, [steps])
@@ -361,7 +317,6 @@ if __name__ == "__main__":
 
 
     def plot():
-        import matplotlib
         from matplotlib import pyplot as plt
 
         plt.figure(figsize=(10, 5))

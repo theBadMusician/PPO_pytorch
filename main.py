@@ -1,6 +1,6 @@
 import torch
 from PPOAgent import PPOAgent
-from SimpleGoalEnv import SimpleGoalEnv
+from pendulum_env.PendulumEnv import PendulumEnv
 from collections import defaultdict
 from tqdm import tqdm
 
