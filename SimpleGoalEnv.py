@@ -72,16 +72,16 @@ class SimpleGoalEnv(EnvBase):
     def _step(self, tensordict):
         """Performs an action and updates the environment state."""
         action = tensordict["action"].to(self.device)
-        action = torch.clamp(action, min=self.action_low, max=self.action_high)
+        action[0] = torch.clamp(action[0], min=self.action_low, max=self.action_high)
 
         # Force, slope, and friction calculations
         mass = 1.0
-        self.acceleration = action / mass
+        self.acceleration = action[0] / mass
 
         hill_slope = torch.tanh(self.position / self.goal_position)
         gravitational_force = -9.8 * hill_slope
         friction = -0.1 * self.velocity
-        self.acceleration += (gravitational_force + friction) / mass
+        self.acceleration = self.acceleration + (gravitational_force + friction) / mass
 
         # Update velocity and position, ensuring shape consistency
         self.velocity = (self.velocity + self.acceleration)

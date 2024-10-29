@@ -8,7 +8,7 @@ from tqdm import tqdm
 config = {
     "goal_position": 10.0,
     "max_steps": 100,
-    "device": "cpu",
+    "device": "cuda" if torch.cuda.is_available() else "cpu",
     "frames_per_batch": 1000,
     "total_frames": 50000,
     "sub_batch_size": 64,
