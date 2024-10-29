@@ -20,8 +20,12 @@ from torchrl.envs.transforms.transforms import _apply_to_composite
 from torchrl.envs.utils import check_env_specs, step_mdp
 from termcolor import cprint
 
-from pendulum_env.SinTransform import SinTransform
-from pendulum_env.CosTransform import CosTransform
+if __name__ != "__main__":
+    from pendulum_env.SinTransform import SinTransform
+    from pendulum_env.CosTransform import CosTransform
+else:
+    from SinTransform import SinTransform
+    from CosTransform import CosTransform
 
 DEFAULT_X = np.pi
 DEFAULT_Y = 1.0
@@ -221,6 +225,8 @@ def simple_rollout(env, steps=100):
     return data
 
 if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+
     env = PendulumEnv(device="cuda")
     check_env_specs(env)
 
@@ -274,14 +280,15 @@ if __name__ == "__main__":
     torch.manual_seed(0)
     env.set_seed(0)
 
+    hidden_size = 64
     net = nn.Sequential(
-        nn.Linear(3, 64),
+        nn.Linear(3, hidden_size),
         nn.Tanh(),
-        nn.Linear(64, 64),
+        nn.Linear(hidden_size, hidden_size),
         nn.Tanh(),
-        nn.Linear(64, 64),
+        nn.Linear(hidden_size, hidden_size),
         nn.Tanh(),
-        nn.Linear(64, 1),
+        nn.Linear(hidden_size, 1),
     ).to(device)  # Move network to the correct device
 
 
@@ -291,14 +298,16 @@ if __name__ == "__main__":
         out_keys=["action"],
     )
 
-    optim = torch.optim.Adam(policy.parameters(), lr=2e-3)
+    optim = torch.optim.Adam(policy.parameters(), lr=1e-3)
 
-    batch_size = 32
-    pbar = tqdm.tqdm(range(20_000 // batch_size))
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, 20_000)
+    batch_size = 512
+    episodes = 600_000
+    pbar = tqdm.tqdm(range(episodes // batch_size))
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, episodes)
     logs = defaultdict(list)
 
-    for _ in pbar:
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+    for i_episode in pbar:
         init_td = env.reset(env.gen_params(batch_size=[batch_size], device=device))
         init_td = init_td.to(device)  # Move to the correct device
         rollout = env.rollout(100, policy, tensordict=init_td, auto_reset=False)
@@ -315,18 +324,23 @@ if __name__ == "__main__":
         logs["last_reward"].append(rollout[..., -1]["next", "reward"].mean().item())
         scheduler.step()
 
+        # Save the model
+        checkpoint = episodes // batch_size // 10
+        if i_episode % checkpoint == 0 and i_episode > 0:
+            torch.save(policy.state_dict(), f"pendulum_policy_ep{i_episode}.pth")
 
-    def plot():
-        from matplotlib import pyplot as plt
+        # Update the plots
+        axes[0].cla()
+        axes[0].plot(logs["return"])
+        axes[0].set_title("Returns")
+        axes[0].set_xlabel("Iteration")
 
-        plt.figure(figsize=(10, 5))
-        plt.subplot(1, 2, 1)
-        plt.plot(logs["return"])
-        plt.title("returns")
-        plt.xlabel("iteration")
-        plt.subplot(1, 2, 2)
-        plt.plot(logs["last_reward"])
-        plt.title("last reward")
-        plt.xlabel("iteration")
-        plt.show()
-    plot()
+        axes[1].cla()
+        axes[1].plot(logs["last_reward"])
+        axes[1].set_title("Last Reward")
+        axes[1].set_xlabel("Iteration")
+
+        plt.draw()
+        plt.pause(0.001)  # Brief pause to update the plot
+    plt.savefig(f"results_bs{batch_size}_eps{episodes}.png")
+    plt.show()
