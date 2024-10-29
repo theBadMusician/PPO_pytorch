@@ -10,6 +10,13 @@
             "request": "launch",
             "program": "${cwd}/main.py",
             "console": "integratedTerminal"
+        },
+        {
+            "name": "Python Debugger: Current",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
         }
     ]
 }

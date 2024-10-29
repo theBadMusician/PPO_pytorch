@@ -20,8 +20,8 @@ from torchrl.envs.transforms.transforms import _apply_to_composite
 from torchrl.envs.utils import check_env_specs, step_mdp
 from termcolor import cprint
 
-from SinTransform import SinTransform
-from CosTransform import CosTransform
+from pendulum_env.SinTransform import SinTransform
+from pendulum_env.CosTransform import CosTransform
 
 DEFAULT_X = np.pi
 DEFAULT_Y = 1.0
