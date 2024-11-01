@@ -623,20 +623,76 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
 #
 # * Repeat
 #
-
+from scipy.stats import norm  # For Gaussian PDF
+import numpy as np
+import matplotlib.animation as animation
 
 logs = defaultdict(list)
 pbar = tqdm(total=total_frames)
 eval_str = ""
 
-# We iterate over the collector until it reaches the total number of frames it was
-# designed to collect:
+# Define x-values for plotting the PDFs
+action_space_low = 0  # Adjust based on your action space
+action_space_high = 1  # Adjust based on your action space
+x_values = np.linspace(action_space_low, action_space_high, 1000)
+
+# Initialize lists to store loc and scale over time
+loc_over_time = []
+scale_over_time = []
+
+# Initialize the plot
+fig, ax = plt.subplots(figsize=(8, 6))
+lines = []
+num_plots = 3  # Number of PDFs to plot per iteration
+
+def init():
+    """Initialize the background of the animation."""
+    ax.set_xlim(action_space_low, action_space_high)
+    ax.set_ylim(0, 5)  # Adjust the y-limit based on expected PDF values
+    ax.set_xlabel('Action')
+    ax.set_ylabel('Probability Density')
+    ax.set_title('Gaussian PDFs Over Time')
+    return lines
+
+def update(frame):
+    """Update function for the animation."""
+    ax.clear()
+    ax.set_xlim(action_space_low, action_space_high)
+    ax.set_ylim(0, 5)
+    ax.set_xlabel('Action')
+    ax.set_ylabel('Probability Density')
+    ax.set_title('Gaussian PDFs Over Time')
+
+    # Plot all accumulated distributions
+    for time_step in range(len(loc_over_time)):
+        loc = loc_over_time[time_step]
+        scale = scale_over_time[time_step]
+        for idx in range(num_plots):
+            mu = loc[idx]
+            sigma = max(scale[idx], 1e-6)
+            pdf = norm.pdf(x_values, mu, sigma)
+            ax.plot(x_values, pdf, alpha=0.1, color='blue')
+
+    # Plot the current distributions with higher opacity
+    loc = loc_over_time[-1]
+    scale = scale_over_time[-1]
+    for idx in range(num_plots):
+        mu = loc[idx]
+        sigma = max(scale[idx], 1e-6)
+        pdf = norm.pdf(x_values, mu, sigma)
+        ax.plot(x_values, pdf, alpha=0.8, label=f'Time Step {frame}, Data Point {idx+1}')
+
+    ax.legend()
+    return lines
+
+# Create the animation object
+ani = animation.FuncAnimation(fig, update, init_func=init, blit=False)
+
+# Training loop
 for i, tensordict_data in enumerate(collector):
-    # we now have a batch of data to work with. Let's learn something from it.
+    # Learning from the batch of data
     for _ in range(num_epochs):
-        # We'll need an "advantage" signal to make PPO work.
-        # We re-compute it at each epoch as its value depends on the value
-        # network which is updated in the inner loop.
+        # Compute the advantage signal
         advantage_module(tensordict_data)
         data_view = tensordict_data.reshape(-1)
         replay_buffer.extend(data_view.cpu())
@@ -649,13 +705,27 @@ for i, tensordict_data in enumerate(collector):
                 + loss_vals["loss_entropy"]
             )
 
-            # Optimization: backward, grad clipping and optimization step
+            # Optimization step with gradient clipping
             loss_value.backward()
-            # this is not strictly mandatory but it's good practice to keep
-            # your gradient norm bounded
             torch.nn.utils.clip_grad_norm_(loss_module.parameters(), max_grad_norm)
             optim.step()
             optim.zero_grad()
+
+            # Extract loc and scale during training
+            obs = subdata["observation"].to(device)
+            with torch.no_grad():
+                dist = policy_module(obs)
+            # Unpack the dist tuple
+            loc_tensor, scale_tensor, *rest = dist
+            loc = loc_tensor.cpu().numpy().flatten()
+            scale = scale_tensor.cpu().numpy().flatten()
+
+            # Store loc and scale for animation
+            loc_over_time.append(loc)
+            scale_over_time.append(scale)
+
+            # Update the animation
+            ani.event_source.start(0)  # Trigger the update function
 
     logs["reward"].append((tensordict_data["next", "reward"].mean()).item())
     pbar.update(tensordict_data.numel())
@@ -666,16 +736,10 @@ for i, tensordict_data in enumerate(collector):
     stepcount_str = f"step count (max): {logs['step_count'][-1]}"
     logs["lr"].append(optim.param_groups[0]["lr"])
     lr_str = f"lr policy: {logs['lr'][-1]: 4.4f}"
+
     if i % 10 == 0 and i > 0:
-        # We evaluate the policy once every 10 batches of data.
-        # Evaluation is rather simple: execute the policy without exploration
-        # (take the expected value of the action distribution) for a given
-        # number of steps (1000, which is our ``env`` horizon).
-        # The ``rollout`` method of the ``env`` can take a policy as argument:
-        # it will then execute this policy at each step.
+        # Evaluation
         with set_exploration_type(ExplorationType.MEAN), torch.no_grad():
-            # execute a rollout with the trained policy
-            # TODO: Fix the problem with mean value
             eval_rollout = env.rollout(1000, policy_module)
             logs["eval reward"].append(eval_rollout["next", "reward"].mean().item())
             logs["eval reward (sum)"].append(
@@ -687,12 +751,37 @@ for i, tensordict_data in enumerate(collector):
                 f"(init: {logs['eval reward (sum)'][0]: 4.4f}), "
                 f"eval step-count: {logs['eval step_count'][-1]}"
             )
+            # Visualize the policy outputs for the first 3 steps
+            actions = eval_rollout["action"].cpu().numpy()
+            print("actions", actions[:3])
+
+            # Extract loc and scale during evaluation
+            obs = eval_rollout["observation"].to(device)
+            dist = policy_module(obs)
+            # Unpack the dist tuple
+            loc_tensor, scale_tensor, *rest = dist
+            loc = loc_tensor.cpu().numpy().flatten()
+            scale = scale_tensor.cpu().numpy().flatten()
+
+            # Store loc and scale for animation
+            loc_over_time.append(loc)
+            scale_over_time.append(scale)
+
+            # Update the animation
+            ani.event_source.start(0)  # Trigger the update function
+
             del eval_rollout
+
     pbar.set_description(", ".join([eval_str, cum_reward_str, stepcount_str, lr_str]))
 
-    # We're also using a learning rate scheduler. Like the gradient clipping,
-    # this is a nice-to-have but nothing necessary for PPO to work.
+    # Learning rate scheduler step
     scheduler.step()
+
+# After training, show the final accumulated distributions
+plt.show()
+
+# Optionally, save the animation as a video file
+ani.save('policy_distributions_animation.mp4', writer='ffmpeg')
 
 ######################################################################
 # Results
