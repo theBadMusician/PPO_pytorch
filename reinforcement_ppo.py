@@ -350,6 +350,11 @@ print("reward_spec:", env.reward_spec)
 print("input_spec:", env.input_spec)
 print("action_spec (as defined by input_spec):", env.action_spec)
 
+# Print max and min action values from the environment
+print("max action value:", env.action_spec.space.high)
+print("min action value:", env.action_spec.space.low)
+
+
 ######################################################################
 # the :func:`check_env_specs` function runs a small rollout and compares its output against the environment
 # specs. If no error is raised, we can be confident that the specs are properly defined:
@@ -631,62 +636,30 @@ logs = defaultdict(list)
 pbar = tqdm(total=total_frames)
 eval_str = ""
 
-# Define x-values for plotting the PDFs
-action_space_low = 0  # Adjust based on your action space
-action_space_high = 1  # Adjust based on your action space
-x_values = np.linspace(action_space_low, action_space_high, 1000)
+# Extract action space bounds from the environment
+action_space_low = env.action_spec.space.low.cpu().numpy()
+action_space_high = env.action_spec.space.high.cpu().numpy()
 
-# Initialize lists to store loc and scale over time
-loc_over_time = []
-scale_over_time = []
+# If action space is multi-dimensional, select the first dimension
+if isinstance(action_space_low, np.ndarray):
+    action_space_low = action_space_low[0]
+    action_space_high = action_space_high[0]
 
-# Initialize the plot
-fig, ax = plt.subplots(figsize=(8, 6))
-lines = []
-num_plots = 3  # Number of PDFs to plot per iteration
+# Print the max and min action values
+print("max action value:", action_space_high)
+print("min action value:", action_space_low)
 
-def init():
-    """Initialize the background of the animation."""
-    ax.set_xlim(action_space_low, action_space_high)
-    ax.set_ylim(0, 5)  # Adjust the y-limit based on expected PDF values
-    ax.set_xlabel('Action')
-    ax.set_ylabel('Probability Density')
-    ax.set_title('Gaussian PDFs Over Time')
-    return lines
+# Define the action bins (e.g., from min to max action, stepping by 0.5)
+bin_width = 0.5
+bins = np.arange(action_space_low, action_space_high + bin_width, bin_width)
 
-def update(frame):
-    """Update function for the animation."""
-    ax.clear()
-    ax.set_xlim(action_space_low, action_space_high)
-    ax.set_ylim(0, 5)
-    ax.set_xlabel('Action')
-    ax.set_ylabel('Probability Density')
-    ax.set_title('Gaussian PDFs Over Time')
+# Initialize data structures to store mean loc and scale per bin over time
+bin_loc_over_time = {bin_value: [] for bin_value in bins}
+bin_scale_over_time = {bin_value: [] for bin_value in bins}
+time_steps = []
 
-    # Plot all accumulated distributions
-    for time_step in range(len(loc_over_time)):
-        loc = loc_over_time[time_step]
-        scale = scale_over_time[time_step]
-        for idx in range(num_plots):
-            mu = loc[idx]
-            sigma = max(scale[idx], 1e-6)
-            pdf = norm.pdf(x_values, mu, sigma)
-            ax.plot(x_values, pdf, alpha=0.1, color='blue')
-
-    # Plot the current distributions with higher opacity
-    loc = loc_over_time[-1]
-    scale = scale_over_time[-1]
-    for idx in range(num_plots):
-        mu = loc[idx]
-        sigma = max(scale[idx], 1e-6)
-        pdf = norm.pdf(x_values, mu, sigma)
-        ax.plot(x_values, pdf, alpha=0.8, label=f'Time Step {frame}, Data Point {idx+1}')
-
-    ax.legend()
-    return lines
-
-# Create the animation object
-ani = animation.FuncAnimation(fig, update, init_func=init, blit=False)
+# Time step counter
+time_step = 0
 
 # Training loop
 for i, tensordict_data in enumerate(collector):
@@ -717,15 +690,35 @@ for i, tensordict_data in enumerate(collector):
                 dist = policy_module(obs)
             # Unpack the dist tuple
             loc_tensor, scale_tensor, *rest = dist
-            loc = loc_tensor.cpu().numpy().flatten()
-            scale = scale_tensor.cpu().numpy().flatten()
+            loc = loc_tensor.cpu().numpy()
+            scale = scale_tensor.cpu().numpy()
 
-            # Store loc and scale for animation
-            loc_over_time.append(loc)
-            scale_over_time.append(scale)
+            # If action space is multi-dimensional, select the first dimension
+            if loc.ndim > 1:
+                loc = loc[:, 0]
+                scale = scale[:, 0]
+            else:
+                loc = loc.flatten()
+                scale = scale.flatten()
 
-            # Update the animation
-            ani.event_source.start(0)  # Trigger the update function
+            # Round loc to the nearest 0.5 to get action bins
+            binned_actions = np.round(loc / bin_width) * bin_width
+
+            # Group loc and scale by bins
+            for bin_value in bins:
+                indices = np.where(binned_actions == bin_value)[0]
+                if len(indices) > 0:
+                    mean_loc = np.mean(loc[indices])
+                    mean_scale = np.mean(scale[indices])
+                else:
+                    # If no data points in this bin, use NaN or a placeholder
+                    mean_loc = np.nan
+                    mean_scale = np.nan
+                bin_loc_over_time[bin_value].append(mean_loc)
+                bin_scale_over_time[bin_value].append(mean_scale)
+
+            time_steps.append(time_step)
+            time_step += 1
 
     logs["reward"].append((tensordict_data["next", "reward"].mean()).item())
     pbar.update(tensordict_data.numel())
@@ -760,15 +753,35 @@ for i, tensordict_data in enumerate(collector):
             dist = policy_module(obs)
             # Unpack the dist tuple
             loc_tensor, scale_tensor, *rest = dist
-            loc = loc_tensor.cpu().numpy().flatten()
-            scale = scale_tensor.cpu().numpy().flatten()
+            loc = loc_tensor.cpu().numpy()
+            scale = scale_tensor.cpu().numpy()
 
-            # Store loc and scale for animation
-            loc_over_time.append(loc)
-            scale_over_time.append(scale)
+            # If action space is multi-dimensional, select the first dimension
+            if loc.ndim > 1:
+                loc = loc[:, 0]
+                scale = scale[:, 0]
+            else:
+                loc = loc.flatten()
+                scale = scale.flatten()
 
-            # Update the animation
-            ani.event_source.start(0)  # Trigger the update function
+            # Round loc to the nearest 0.5 to get action bins
+            binned_actions = np.round(loc / bin_width) * bin_width
+
+            # Group loc and scale by bins during evaluation
+            for bin_value in bins:
+                indices = np.where(binned_actions == bin_value)[0]
+                if len(indices) > 0:
+                    mean_loc = np.mean(loc[indices])
+                    mean_scale = np.mean(scale[indices])
+                else:
+                    # If no data points in this bin, use NaN or a placeholder
+                    mean_loc = np.nan
+                    mean_scale = np.nan
+                bin_loc_over_time[bin_value].append(mean_loc)
+                bin_scale_over_time[bin_value].append(mean_scale)
+
+            time_steps.append(time_step)
+            time_step += 1
 
             del eval_rollout
 
@@ -777,11 +790,32 @@ for i, tensordict_data in enumerate(collector):
     # Learning rate scheduler step
     scheduler.step()
 
-# After training, show the final accumulated distributions
+# After training, visualize the results
+plt.ioff()
+
+# Plot mean loc over time for each bin
+plt.figure(figsize=(12, 6))
+for bin_value in bins:
+    loc_values = bin_loc_over_time[bin_value]
+    if not all(np.isnan(loc_values)):
+        plt.plot(time_steps, loc_values, label=f'Bin {bin_value}')
+plt.xlabel('Time Step')
+plt.ylabel('Mean loc')
+plt.title('Mean loc Over Time per Action Bin')
+plt.legend()
 plt.show()
 
-# Optionally, save the animation as a video file
-ani.save('policy_distributions_animation.mp4', writer='ffmpeg')
+# Plot mean scale over time for each bin
+plt.figure(figsize=(12, 6))
+for bin_value in bins:
+    scale_values = bin_scale_over_time[bin_value]
+    if not all(np.isnan(scale_values)):
+        plt.plot(time_steps, scale_values, label=f'Bin {bin_value}')
+plt.xlabel('Time Step')
+plt.ylabel('Mean scale')
+plt.title('Mean scale Over Time per Action Bin')
+plt.legend()
+plt.show()
 
 ######################################################################
 # Results
